@@ -9120,6 +9120,50 @@ sub lstopo {
     return;
 }
 
+
+sub bindings {
+    my ( $cargs, $vp, $pid ) = @_;
+
+    if ( $cargs->{binding_show_warning} ) {
+        target_error( $vp, "Reporting per node rather than per process" );
+    }
+
+    my $cmd = $cargs->{binding_command};
+
+    $cmd =~ s{%p}{$pid}g;
+
+    my @output = slurp_cmd($cmd);
+
+    # Check the return code, if it's not found then there won't be any
+    # output, if it was found but returned an error then do report the
+    # output as it might be useful.
+    my $rc = $?;
+    if ( $rc != 0 ) {
+        if ( not find_exe("hwloc-ps") ) {
+            target_error( $vp, "Error running hwloc-ps: command not found" );
+            return;
+        } else {
+            target_error( $vp, "Error running hwloc-ps" );
+        }
+    }
+
+    chomp @output;
+    my @listpids = keys $inner_conf{rmpids};
+    #foreach my $mypid (keys \%listpids) {
+    my $pipo = join(" ", @listpids);
+
+    foreach my $line (@output) {
+        my @words = split /\s+/, $line;
+        my $linepid = $words[0];
+        my $linerank = $inner_conf{rmpids}{$linepid}{rank};
+        if (grep /$linepid/, @listpids ) {
+            output( $vp, "$inner_conf{hostname} rank:$linerank pid:$words[0] binding:$words[1]" );
+        }
+    }
+    return;
+}
+
+
 sub run_cmd_against_target {
     my ( $cargs, $rank, $pid ) = @_;
 
@@ -10697,6 +10741,7 @@ sub common_main {
                 type     => '=s',
                 default =>
 'rank,hostname,pid,vmsize,vmrss,stat.state=S,load1=uptime,pcpu=%cpu,stat.processor=lcore,name=command'
+
             },
         ]
     };
@@ -10758,9 +10803,58 @@ sub common_main {
         handler      => \&lstopo,
         arg_long     => 'lstopo',
         help         => 'Show CPU topology using lstopo',
-        options_i    => { lstopo_command => 'lstopo --pid %p -.txt', },
+        options_i    => { lstopo_command => 'lstopo --pid %p -', },
         options_bool => { lstopo_show_warning => 'no', },
     };
+
+    $allfns{bindings} = {
+        handler_all      => \&bindings,
+        arg_long     => 'bindings',
+        help         => 'Show processes bindings on node',
+        options_i    => { binding_command => 'hwloc-ps', },
+    };
+
+    # $allfns{showrank} = {
+    #     handler      => \&mpi_show_rank,
+    #     handler_one => \&show_mpi_rank_one,
+    #     needs_gdb   => 1,
+    #     arg_long     => 'show-rank',
+    #     help         => 'Show mpi rank of process',
+    #     options_i   => {
+    #         minfo   => undef,
+    #         mpi_dll => undef,
+    #     }
+    # };
+
+#     $allfns{showrank} = {
+#         handler_all => \&show_proc_all,
+#         out_handler => \&show_proc_format,
+#         arg_long    => 'show-rank',
+#         help        => 'Show MPI rank',
+#         options_i   => {
+#             column_seperator => '  ',
+#             proc_sort_key    => 'rank',
+#             nprocs_output    => undef,
+#         },
+#         options_bool => {
+#             proc_shows_proc    => 'yes',
+#             proc_shows_stat    => 'yes',
+#             proc_shows_fds     => 'no',
+#             proc_shows_maps    => 'no',
+#             proc_show_header   => 'yes',
+#             reverse_sort_order => 'no',
+#         },
+#         secondary => [
+#             {
+#                 arg_long => 'proc_format',
+#                 type     => '=s',
+#                 default =>
+# 'rank,hostname,pid,vmsize,vmrss,stat.state=S,load1=uptime,pcpu=%cpu,stat.processor=lcore,name=command'
+#             },
+#         ]
+#     };
+
+
 
     $allfns{command} = {
         handler   => \&run_cmd_against_target,
