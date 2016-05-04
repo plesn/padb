@@ -11002,7 +11002,7 @@ sub common_main {
         handler      => \&binding_pid,
         arg_long     => 'binding',
         help         => 'Show process binding',
-        options_bool => { binding_hierarch => 'no', binding_ompi => 'no', },
+        #options_bool => { binding_hierarch => 'no', binding_ompi => 'no', },
     };
 
     # $allfns{showrank} = {

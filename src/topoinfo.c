@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <hwloc.h>
 
+
+
+
 #define OPAL_SUCCESS 0
 #define OPAL_ERROR 1
 #define OPAL_ERR_NOT_BOUND 2
@@ -141,39 +144,22 @@ char *get_binding_openmpi(hwloc_cpuset_t cpuset, hwloc_topology_t topo) { //char
 char *get_binding(hwloc_cpuset_t cpuset, hwloc_topology_t topo) {
     int str_size = 512;
     char *str = malloc(str_size);
-    //hwloc_obj_t obj = hwloc_get_first_largest_obj_inside_cpuset(topo, cpuset);
-    //hwloc_obj_t obj = hwloc_get_first_largest_obj_inside_cpuset(topo, cpuset);
+    hwloc_obj_t obj = hwloc_get_first_largest_obj_inside_cpuset(topo, cpuset);
+    while (obj->type == HWLOC_OBJ_CACHE && obj->arity == 1) {
+        obj = obj->first_child;
+    }
+
     int verbose = 0;
     hwloc_obj_snprintf(str, str_size, topo, obj, NULL, verbose);
     return str;
 }
 
 
-int main_old(int argc, char *argv[]) {
-    if (argc <= 1) return 1;
-    hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
-    /* int rc = hwloc_bitmap_taskset_sscanf(cpuset, argv[1]); */
-    /* if (rc != 0) return 1; */
-    int pid = atoi(argv[1]);
-
-    char *topofile = argc > 1 ? argv[2] : NULL;
-
-    hwloc_topology_t topo;
-    topo_init(&topo, topofile);
-
-    hwloc_get_proc_cpubind(topo, pid, cpuset, 0);
-
-    char *report_binding = get_binding_openmpi(cpuset, topo);
-    char *objstr = get_binding(cpuset, topo);
-    char *maskstr;
-    hwloc_bitmap_asprintf(&maskstr, cpuset);
-    printf("%s | %s | %s", report_binding, objstr, maskstr);
-
-    return 0;
-}
-
 int main(int argc, char *argv[]) {
-    if (argc <= 1) return 1;
+    if (argc <= 1) {
+        fprintf(stderr, "usage: %s [pid]+ \n", argv[0]);
+        return 1;
+    }
     hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
     hwloc_topology_t topo;
     topo_init(&topo, NULL);
@@ -195,4 +181,6 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
+
+
 
