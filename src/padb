@@ -347,6 +347,7 @@ use Config;
 use IO::Socket;
 use IO::Select;
 use Carp;
+use Time::HiRes qw(gettimeofday tv_interval);
 
 ###############################################################################
 #
@@ -9120,48 +9121,231 @@ sub lstopo {
     return;
 }
 
+sub prettyBytes {
+ my ($size) = @_;
+ foreach ('B','KB','MB','GB','TB','PB')
+ {
+    return sprintf("%d $_",$size) if $size < 1024;
+    $size /= 1024;
+ }
+}
 
-sub bindings {
-    my ( $cargs, $vp, $pid ) = @_;
+sub binding_get_short_topo {
+    my ( $topofile ) = @_;
 
-    if ( $cargs->{binding_show_warning} ) {
-        target_error( $vp, "Reporting per node rather than per process" );
+    my @hwloc_info = slurp_cmd "hwloc-info -i $topofile --whole-system";
+
+    my %topo; # hash { number_at_level => [topo_objects] }
+    for my $d (@hwloc_info) {
+        if ($d =~ /.*depth (\d+):\s+(\d+) (\w+)/) {
+            push @{$topo{$2}}, $3;
+        }
     }
 
-    my $cmd = $cargs->{binding_command};
+    my @sorted_levels = sort { $a <=> $b } map {int} keys %topo;
+    my @topo; # pick one per level, avoid caches if possible
+    for my $l (@sorted_levels) {
+        my @level = @{$topo{$l}};
+        my $chosen = (grep {!/Cache/} @level)[0];
+        $chosen = $level[0] if !$chosen;
+        #print "> $l : @level : $chosen\n";
+        next if $chosen =~ /Machine/;
+        push @topo, "$chosen:$l"
+    }
+    return join ".", @topo;
+}
 
-    $cmd =~ s{%p}{$pid}g;
 
-    my @output = slurp_cmd($cmd);
 
-    # Check the return code, if it's not found then there won't be any
-    # output, if it was found but returned an error then do report the
-    # output as it might be useful.
-    my $rc = $?;
-    if ( $rc != 0 ) {
-        if ( not find_exe("hwloc-ps") ) {
-            target_error( $vp, "Error running hwloc-ps: command not found" );
-            return;
+sub range_from_nums {
+    my ($numbers) = @_;
+    my @nums = split /\,/, $numbers;
+    return $nums[0] if scalar(@nums) <= 1;
+
+    my @ranges;
+    my $rn = 0;
+    for my $i (0..$#nums) {
+        $rn++ if ($nums[$i] > $nums[$i-1] + 1);
+        push @{$ranges[$rn]}, $nums[$i]
+    }
+    my $outranges = join(",",
+                         map {scalar(@{$_})<=1
+                                  ? "$_->[0]"
+                                  : "$_->[0]-$_->[$#{$_}]"
+                         } @ranges);
+    return "$outranges";
+}
+
+sub topo {
+    my ( $cargs, $vp ) = @_;
+    my $hostname = $inner_conf{hostname};
+    $hostname =~ /(\d+)$/;
+    my $hostnum = $1;
+    
+    # my $start = gettimeofday();
+
+    my $topofile = "/tmp/topo-$hostname.xml";    
+    slurp_cmd "hwloc-ls --whole-system $topofile";
+
+    my @machine_info = slurp_cmd "hwloc-info -i $topofile --whole-system machine:0";
+    my @socket_info = slurp_cmd "hwloc-info -i $topofile --whole-system socket:0";
+
+    # my $stop = gettimeofday();
+    # printf("$hostname> duration: %.2fs\n", $stop-$start);
+
+    my $ProductVersion =  ((grep /DMIProductVersion/, @machine_info)[0] =~ /=\s+(.*)$/)[0];
+    my $Memory = prettyBytes( ((grep /total memory/, @machine_info)[0] =~ /=\s+(.*)$/)[0]);
+    my $CPUModel = ((grep /info CPUModel/, @socket_info)[0] =~ /=\s+(.*)$/)[0];
+
+    my $topo_short = binding_get_short_topo $topofile;
+
+    output( $hostnum, " $hostname ($ProductVersion, $CPUModel, $Memory RAM) topology: $topo_short");
+
+}
+
+
+sub binding_pretty_hierarch {
+    my ($binding, $htopo_pattern, $topofile) = @_;
+
+    my @hbinding = slurp_cmd "hwloc-calc -i $topofile -p -H $htopo_pattern $binding";
+    if ($? != 0 || scalar(@hbinding) <= 0) {
+        return undef;
+    }
+    chomp $hbinding[0];
+    return $hbinding[0];
+}
+
+
+sub binding_pretty_fold {
+    my ($binding, $htopo_pattern, $topofile) = @_;
+    my @levels = split /\./, $htopo_pattern;
+
+    my @harr;
+    for my $l (@levels) {
+
+        my @ns = slurp_cmd "hwloc-calc -i $topofile -p -I $l $binding";
+        if ($? != 0 or scalar(@ns) <=0) {
+            print "FAIL(binding_pretty_hierarch)> $inner_conf{hostname} >> hwloc-calc -p -I $l $binding\n";
+            return undef;
+        }
+        my $n = $ns[0];
+        chomp $n;
+
+        #print "> $inner_conf{hostname} >> $n = hwloc-calc -p -I $l $binding\n";
+
+        if (defined $n) {
+            my $r = range_from_nums $n;
+            push @harr, "$l:$r";
         } else {
-            target_error( $vp, "Error running hwloc-ps" );
+            push @harr, "$l:<0>";
         }
+        
     }
+    my $hbinding = join ".", @harr;
+    return $hbinding;
 
-    chomp @output;
-    my @listpids = keys $inner_conf{rmpids};
-    #foreach my $mypid (keys \%listpids) {
-    my $pipo = join(" ", @listpids);
+}
 
-    foreach my $line (@output) {
-        my @words = split /\s+/, $line;
-        my $linepid = $words[0];
-        my $linerank = $inner_conf{rmpids}{$linepid}{rank};
-        if (grep /$linepid/, @listpids ) {
-            output( $vp, "$inner_conf{hostname} rank:$linerank pid:$words[0] binding:$words[1]" );
-        }
+sub binding {
+    my ( $cargs, $vp) = @_;
+    my $hostname = $inner_conf{hostname};
+    my @node_pids = keys $inner_conf{rmpids};
+    my @node_ranks = map { $inner_conf{rmpids}{$_}{rank} } @node_pids;
+
+    my @bindings = slurp_cmd "./topoinfo @node_pids";
+
+    for my $i (0..$#node_pids)  {
+        my $pid = $node_pids[$i];
+        my $rank = $node_ranks[$i];
+        my $binding_str = $bindings[$i];
+        chomp $binding_str;
+        my ($mypid,  $mask, $report_binding, $binding_pretty) = split ' ', $binding_str;
+        $inner_conf{rmpids}{$pid}{binding} = $mask;
+        output($rank, " $hostname $mask $report_binding $binding_pretty");
     }
     return;
 }
+
+sub binding_old {
+    my ( $cargs, $vp) = @_;
+    my $hostname = $inner_conf{hostname};
+    my @node_pids = keys $inner_conf{rmpids};
+    my @node_ranks = map { $inner_conf{rmpids}{$_}{rank} } @node_pids;
+
+    # my $t1 = gettimeofday();
+    # my $topofile = "/tmp/topo-$hostname.xml";
+    # slurp_cmd "hwloc-ls --whole-system $topofile";
+    # my $t2 = gettimeofday();
+
+    my @pid_bindings = slurp_cmd "hwloc-ps -c --whole-system";
+    if ( $? != 0 or scalar(@pid_bindings) <= 0) {
+        if ( not find_exe("hwloc-ps") ) {
+            target_error( $vp, "Error running hwloc-ps: command not found" );
+        } else {
+            target_error( $vp, "Error running hwloc-ps" );
+        }
+        return
+    }
+
+    #utput( int(rand(1000)), join(" ", @output));
+    #return;
+    for (@node_pids) {
+        $inner_conf{rmpids}{$_}{binding} = "0x0";
+    }
+    for (@pid_bindings) {
+        my ($pid, $binding) = split /\s+/;
+        if (grep /$pid/, @node_pids) {
+            $inner_conf{rmpids}{$pid}{binding} = $binding;
+        }
+    }
+
+
+    my $topofile;
+    my $htopo;
+    my $htopo_pattern;
+    if ($cargs->{binding_hierarch} or $cargs->{binding_ompi}) {
+        $topofile = "/tmp/topo-$hostname.xml";
+        slurp_cmd "hwloc-ls --whole-system --no-io --no-bridge --no-useless-caches $topofile";
+        $htopo = binding_get_short_topo $topofile;
+        $htopo_pattern = $htopo;
+        $htopo_pattern =~ s/:\d+//g;
+    }
+
+    for my $i (0..$#node_pids) {
+        my $pid = $node_pids[$i];
+        my $rank = $node_ranks[$i];
+        my $binding = $inner_conf{rmpids}{$pid}{binding};
+
+        if ($cargs->{binding_hierarch}) {
+            chomp(my ($mask) = slurp_cmd "hwloc-calc $binding");
+            #chomp(my ($mask) = slurp_cmd "hwloc-calc -i $topofile -p $binding");
+            #my $mask = "bar";
+            #my $hbinding = binding_pretty_1 $binding;
+            #my $hbinding = binding_pretty_hierarch $binding, $htopo_pattern, $topofile;
+            #my $hbinding = binding_pretty_hierarch $binding, "socket.core.pu", $topofile;
+            #my $hbinding = binding_pretty_fold $binding, $htopo_pattern, $topofile;
+            #my $hbinding ="foo";
+            my $hbinding = binding_pretty_fold $binding, "socket.core.pu", $topofile;
+            if (not defined $hbinding) {
+                target_error($rank, "hwloc-calc failed");
+                $hbinding="";
+            }
+            output($rank, " host=$hostname binding=$binding mask=$mask ($hbinding)");
+        } elsif ($cargs->{binding_ompi}) {
+            #chomp(my ($maski) = slurp_cmd "hwloc-calc $binding $topofile");
+            my $maski = $binding;
+            my ($binding_ompi) = slurp_cmd "./topoinfo $maski $topofile";
+            #my ($binding_ompi) = slurp_cmd "./topoinfo $maski";
+            output($rank, " host=$hostname binding=$binding mask=$maski $binding_ompi");
+        } else {
+            output($rank, " host=$hostname binding=$binding");
+        }
+                                        
+
+    }
+    return;
+}
+
 
 
 sub run_cmd_against_target {
@@ -10807,11 +10991,18 @@ sub common_main {
         options_bool => { lstopo_show_warning => 'no', },
     };
 
-    $allfns{bindings} = {
-        handler_all      => \&bindings,
-        arg_long     => 'bindings',
-        help         => 'Show processes bindings on node',
-        options_i    => { binding_command => 'hwloc-ps', },
+    $allfns{topo} = {
+        handler_all  => \&topo,
+        arg_long     => 'topo',
+        help         => 'Show node topology',
+    };
+
+    $allfns{binding} = {
+        handler_all  => \&binding,
+        handler      => \&binding_pid,
+        arg_long     => 'binding',
+        help         => 'Show process binding',
+        options_bool => { binding_hierarch => 'no', binding_ompi => 'no', },
     };
 
     # $allfns{showrank} = {
