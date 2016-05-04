@@ -1,8 +1,11 @@
 bin_SCRIPTS = padb
-libexec_PROGRAMS = minfo
+libexec_PROGRAMS = minfo topoinfo
 minfo_CFLAGS = -Wall
 minfo_LDADD = -ldl
 minfo_SOURCES = minfo.c mpi_interface.h
+topoinfo_SOURCES = topoinfo.c
+topoinfo_LDADD = -lhwloc
+topoinfo_CFLAGS = -Wall
 EXTRA_DIST = padb
 
 tidy:
