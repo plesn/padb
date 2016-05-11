@@ -9259,7 +9259,7 @@ sub binding {
         my $rank = $node_ranks[$i];
         my $binding_str = $bindings[$i];
         chomp $binding_str;
-        my ($mypid,  $mask, $report_binding, $binding_pretty) = split ' ', $binding_str;
+        my ($mypid,  $mask, $report_binding, $binding_pretty) = split ',', $binding_str;
         $inner_conf{rmpids}{$pid}{binding} = $mask;
         output($rank, " $hostname $mask $report_binding $binding_pretty");
     }

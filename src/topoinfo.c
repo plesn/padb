@@ -1,8 +1,33 @@
+/*
+ *
+ * Copyright (c) 2016      Bull SAS
+ *
+ * Copyrights from openmpi opal/mca/hwloc/base/hwloc_base_util.c :
+ * Copyright (c) 2004-2005 The Trustees of Indiana University and Indiana
+ *                         University Research and Technology
+ *                         Corporation.  All rights reserved.
+ * Copyright (c) 2004-2006 The University of Tennessee and The University
+ *                         of Tennessee Research Foundation.  All rights
+ *                         reserved.
+ * Copyright (c) 2004-2005 High Performance Computing Center Stuttgart,
+ *                         University of Stuttgart.  All rights reserved.
+ * Copyright (c) 2004-2005 The Regents of the University of California.
+ *                         All rights reserved.
+ * Copyright (c) 2011-2012 Cisco Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012-2015 Los Alamos National Security, LLC.
+ *                         All rights reserved.
+ * Copyright (c) 2013-2014 Intel, Inc. All rights reserved.
+ * Copyright (c) 2015-2016 Research Organization for Information Science
+ *                         and Technology (RIST). All rights reserved.
+ */
+
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <hwloc.h>
 
 
 
+/* function taken from Openmpi */
 
 #define OPAL_SUCCESS 0
 #define OPAL_ERROR 1
@@ -23,7 +48,7 @@ int opal_hwloc_base_cset2mapstr(char *str, int len,
     int core_index, pu_index;
     const int stmp = sizeof(tmp) - 1;
     hwloc_obj_t socket, core, pu;
-    //hwloc_obj_t root;
+    hwloc_obj_t root;
     /* opal_hwloc_topo_data_t *sum; */
 
     str[0] = tmp[stmp] = '\0';
@@ -34,9 +59,11 @@ int opal_hwloc_base_cset2mapstr(char *str, int len,
     }
 
     /* if the cpuset includes all available cpus, then we are unbound */
-    //root = hwloc_get_root_obj(topo);
+    root = hwloc_get_root_obj(topo);
     /* if (NULL == root->userdata) { */
-    /*     opal_hwloc_base_filter_cpus(topo); */
+    /*     /\* opal_hwloc_base_filter_cpus(topo); *\/ */
+    /*     printf("error: opal_hwloc_base_filter_cpus(topo)\n"); */
+    /*     exit(1); */
     /* } else { */
     /*     sum = (opal_hwloc_topo_data_t*)root->userdata; */
     /*     if (NULL == sum->available) { */
@@ -46,6 +73,11 @@ int opal_hwloc_base_cset2mapstr(char *str, int len,
     /*         return OPAL_ERR_NOT_BOUND; */
     /*     } */
     /* } */
+    hwloc_cpuset_t avail = hwloc_bitmap_alloc();
+    hwloc_bitmap_and(avail, root->online_cpuset, root->allowed_cpuset);
+    if (0 != hwloc_bitmap_isincluded(avail, cpuset)) {
+        return OPAL_ERR_NOT_BOUND;
+    }
 
     /* Iterate over all existing sockets */
     for (socket = hwloc_get_obj_by_type(topo, HWLOC_OBJ_SOCKET, 0);
@@ -109,39 +141,25 @@ int topo_init(hwloc_topology_t *topo_p, char* topofile) {
     return hwloc_topology_load(*topo_p);
 }
 
-char *get_binding_openmpi(hwloc_cpuset_t cpuset, hwloc_topology_t topo) { //char *topofile) {
+char *binding_openmpi_tostr(hwloc_cpuset_t cpuset, hwloc_topology_t topo) {
+    int n_pus = hwloc_get_nbobjs_by_type (topo, HWLOC_OBJ_PU);
 
-    /* hwloc_topology_t topo; */
-    /* hwloc_topology_init(&topo); */
-
-    /* hwloc_topology_ignore_type(topo, HWLOC_OBJ_CACHE); */
-    /* hwloc_topology_ignore_type(topo, HWLOC_OBJ_MISC); */
-    /* hwloc_topology_ignore_type(topo, HWLOC_OBJ_NODE); */
-    /* hwloc_topology_ignore_type(topo, HWLOC_OBJ_MACHINE); */
-    /* hwloc_topology_ignore_type(topo, HWLOC_OBJ_SYSTEM); */
-    /* hwloc_topology_set_flags(topo, HWLOC_TOPOLOGY_FLAG_WHOLE_SYSTEM); */
-
-    /* if (topofile != NULL) { */
-    /*     if (0 != hwloc_topology_set_xml(topo, topofile)) { */
-    /*         fprintf(stderr, "topofile failed\n"); */
-    /*     } */
-    /* } */
-
-    /* hwloc_topology_load(topo); */
-
-    /* hwloc_cpuset_t cpuset = hwloc_bitmap_alloc(); */
-    /* hwloc_get_cpubind(topo, cpuset, HWLOC_CPUBIND_THREAD); */
-
-    int str_size = 512;
+    int str_size = 4*n_pus + 512; /* to be sure */
     char *str = malloc(str_size);
     int rc = opal_hwloc_base_cset2mapstr(str, str_size, topo, cpuset);
-    //snprintf(str, str_size, "error...");
-    
-    if (rc != 0) return NULL;
-    return str;
+    switch (rc) {
+    case OPAL_ERR_NOT_BOUND:
+        snprintf(str, str_size, "not bound (or bound to all available processors)");
+        return str;
+    case OPAL_SUCCESS:
+        return str;
+    default:
+        free(str);
+        return NULL;
+    }
 }
 
-char *get_binding(hwloc_cpuset_t cpuset, hwloc_topology_t topo) {
+char *binding_obj_tostr(hwloc_cpuset_t cpuset, hwloc_topology_t topo) {
     int str_size = 512;
     char *str = malloc(str_size);
     hwloc_obj_t obj = hwloc_get_first_largest_obj_inside_cpuset(topo, cpuset);
@@ -155,29 +173,101 @@ char *get_binding(hwloc_cpuset_t cpuset, hwloc_topology_t topo) {
 }
 
 
-int main(int argc, char *argv[]) {
-    if (argc <= 1) {
-        fprintf(stderr, "usage: %s [pid]+ \n", argv[0]);
-        return 1;
-    }
+void print_binding(hwloc_topology_t topo, int pid) {
     hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
+    hwloc_get_proc_cpubind(topo, pid, cpuset, 0);
+
+    char *report_binding = binding_openmpi_tostr(cpuset, topo);
+    char *objstr = binding_obj_tostr(cpuset, topo);
+    char *maskstr;
+    hwloc_bitmap_asprintf(&maskstr, cpuset);
+
+    printf("%d, %s, %s, %s\n", pid, maskstr, report_binding, objstr);
+
+    free(report_binding);
+    free(objstr);
+    free(maskstr);
+    hwloc_bitmap_free(cpuset);
+}
+
+char *memory_to_string(hwloc_uint64_t memory) {
+    static char *units[] = {"B", "KB" "MB", "GB", "TB", "PB", NULL};
+    unsigned int i = 0;
+    for (i=0; memory > 1024 && i < sizeof(units) ; i++) {
+        memory /= 1024;
+    }
+    char *str;
+    asprintf(&str, "%lu %s", memory, units[i]);
+    return str;
+}
+
+void print_node_info(hwloc_topology_t topo) {
+    hwloc_obj_t machine = hwloc_get_obj_by_type (topo, HWLOC_OBJ_MACHINE, 0);
+    hwloc_obj_t socket0 = hwloc_get_obj_by_type (topo, HWLOC_OBJ_SOCKET, 0);
+    const char *host_name = hwloc_obj_get_info_by_name(machine, "HostName");
+    const char *product_version = hwloc_obj_get_info_by_name(machine, "DMIProductVersion");
+    hwloc_uint64_t total_memory = machine->memory.total_memory;
+    const char *cpu_model = hwloc_obj_get_info_by_name(socket0, "CPUModel");
+    printf("%s, %s, %s, %s RAM, ", host_name, product_version, cpu_model,
+           memory_to_string(total_memory));
+
+    int depth = hwloc_topology_get_depth(topo); 
+    int d;
+    int d_printed=0;
+    for (d=1; d<depth; d++) {
+        int w = hwloc_get_nbobjs_by_depth(topo, d);
+        int w_next = hwloc_get_nbobjs_by_depth(topo, d+1);
+        int w_prev = hwloc_get_nbobjs_by_depth(topo, d-1);
+        hwloc_obj_type_t t = hwloc_get_depth_type(topo, d);
+        if (t == HWLOC_OBJ_CACHE && !((w != w_next) && (w != w_prev))) continue;
+        
+        if (d_printed != 0) {
+            printf(".");
+        }
+        printf("%s:%d", hwloc_obj_type_string(t), w);
+        d_printed++;
+        if (w_next == w) { d++; };
+    }
+    printf("\n");
+}
+
+void usage(char *prog) {
+    fprintf(stderr, "usage: %s [-tbh] [pid]+  \n", prog);
+    fprintf(stderr, " [-b] [pid]+   : print binding of pids\n");
+    fprintf(stderr, " -t            : print node and topology info\n");
+    fprintf(stderr, " -h            : print this help\n");
+}
+
+int main(int argc, char *argv[]) {
+    int opt;
+    enum {BINDING, TOPOINFO} action = BINDING;
+    while ((opt = getopt(argc, argv, "bth")) != -1) {
+        switch(opt) {
+        case 'b': action=BINDING; break;
+        case 't': action=TOPOINFO; break;
+        case 'h':
+        default:
+            usage(argv[0]);
+            return 1;
+        }
+    }
+
     hwloc_topology_t topo;
     topo_init(&topo, NULL);
 
-    int i;
-    for (i=1; i<argc; i++) {
-        int pid = atoi(argv[i]);
-        hwloc_get_proc_cpubind(topo, pid, cpuset, 0);
+    if (action == TOPOINFO) {
+        print_node_info(topo);
+    } else if (action == BINDING) {
+        if (argc - optind < 1) {
+            usage(argv[0]);
+            return 1;
+        }
 
-        char *report_binding = get_binding_openmpi(cpuset, topo);
-        char *objstr = get_binding(cpuset, topo);
-        char *maskstr;
-        hwloc_bitmap_asprintf(&maskstr, cpuset);
-        printf("%d %s %s %s\n", pid, maskstr, report_binding, objstr);
-
-        free(report_binding);
-        free(objstr);
-        free(maskstr);
+        int i;
+        for (i=optind; i<argc; i++) {
+            int pid = atoi(argv[i]);
+            print_binding(topo, pid);
+        }
     }
     return 0;
 }
