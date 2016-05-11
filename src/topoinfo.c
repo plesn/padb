@@ -182,7 +182,7 @@ void print_binding(hwloc_topology_t topo, int pid) {
     char *maskstr;
     hwloc_bitmap_asprintf(&maskstr, cpuset);
 
-    printf("%d, %s, %s, %s\n", pid, maskstr, report_binding, objstr);
+    printf("%d; %s; %s; %s\n", pid, maskstr, report_binding, objstr);
 
     free(report_binding);
     free(objstr);
@@ -208,7 +208,7 @@ void print_node_info(hwloc_topology_t topo) {
     const char *product_version = hwloc_obj_get_info_by_name(machine, "DMIProductVersion");
     hwloc_uint64_t total_memory = machine->memory.total_memory;
     const char *cpu_model = hwloc_obj_get_info_by_name(socket0, "CPUModel");
-    printf("%s, %s, %s, %s RAM, ", host_name, product_version, cpu_model,
+    printf("%s; %s; %s; %s RAM, ", host_name, product_version, cpu_model,
            memory_to_string(total_memory));
 
     int depth = hwloc_topology_get_depth(topo); 

@@ -9140,7 +9140,7 @@ sub lstopo {
 sub binding {
     my ( $cargs, $vp) = @_;
     my $hostname = $inner_conf{hostname};
-    my @node_pids = keys $inner_conf{rmpids};
+    my @node_pids = keys %{$inner_conf{rmpids}};
     my @node_ranks = map { $inner_conf{rmpids}{$_}{rank} } @node_pids;
 
     my $topoinfo = find_topoinfo;
@@ -9155,9 +9155,9 @@ sub binding {
         my $rank = $node_ranks[$i];
         my $binding_str = $bindings[$i];
         chomp $binding_str;
-        my ($mypid,  $mask, $report_binding, $binding_pretty) = split ',', $binding_str;
+        my ($mypid,  $mask, $report_binding, $binding_pretty) = split '\s*;\s*', $binding_str;
         $inner_conf{rmpids}{$pid}{binding} = $mask;
-        output($rank, " $hostname $mask $report_binding $binding_pretty");
+        output($rank, " $hostname $report_binding $mask - $binding_pretty");
     }
     return;
 }
@@ -9176,7 +9176,7 @@ sub topo {
     }
     my $info = $topoinfos[0];
     chomp $info;
-    my ($host_name, $product, $cpu, $ram, $topo) = split '\s*,\s*', $info;
+    my ($host_name, $product, $cpu, $ram, $topo) = split '\s*;\s*', $info;
     output( $hostnum, " $hostname $topo [$product, $cpu, $ram]");
     return;
 }
