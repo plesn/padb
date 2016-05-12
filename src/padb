@@ -737,7 +737,7 @@ sub find_edb {
 # installed to.  If that's not the case or it's not there then look in the
 # same directory as padb is running from.
 sub find_minfo {
-    my $self = $0;
+    my $self = Cwd::realpath $0;
     if ( $self =~ m{\A(.+)/bin/padb\z} ) {
         my $dir = $1;
         if ( -f "$dir/libexec/minfo" ) {
@@ -750,7 +750,7 @@ sub find_minfo {
 
 # Look for topoinfo program. See find_minfo.
 sub find_topoinfo {
-    my $self = $0;
+    my $self = Cwd::realpath $0;
     if ( $self =~ m{\A(.+)/bin/padb\z} ) {
         my $dir = $1;
         if ( -f "$dir/libexec/topoinfo" ) {
