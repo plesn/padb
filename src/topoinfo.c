@@ -24,6 +24,8 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <hwloc.h>
+#include <unistd.h>
+#include <stdlib.h>
 
 
 

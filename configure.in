@@ -3,4 +3,19 @@ AM_INIT_AUTOMAKE(padb,3.3-beta0)
 AC_PROG_CC
 AC_PROG_INSTALL
 AM_PROG_CC_C_O
+
+AC_ARG_WITH([hwloc],
+    AS_HELP_STRING([--without-hwloc], [ignore hwloc (needed for binding info)]))
+
+AS_IF([test "x$with_hwloc" != "xno"],
+    [AC_CHECK_HEADERS([hwloc.h], [have_hwloc_headers=yes])
+    AC_SEARCH_LIBS([hwloc_topology_init], [hwloc], [have_hwloc_lib=yes])
+
+    AS_IF([test "x$have_hwloc_headers" != "xyes" -a "x$have_hwloc_lib" != "xyes"],
+      [AC_MSG_ERROR([Unable to find hwloc (use --without-hwloc if you don't want binding info)])])
+    have_hwloc=true],
+    [have_hwloc=false])
+
+AM_CONDITIONAL(HAVE_HWLOC, test "x$have_hwloc" = xtrue)
+
 AC_OUTPUT(Makefile src/Makefile)
